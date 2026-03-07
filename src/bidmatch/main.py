@@ -8,13 +8,14 @@ def main():
     # ide jön a pipeline indítása
 
 if __name__ == "__main__":
-    # build_training_pipeline()
-    # query = "Zenner vízóra | db"
-    # results = search(query)
+    #build_training_pipeline()
+    query = "Zenner vízmérő óra"
+    unit = "db"
+    results = search(query, unit)
 
-    # print("\nTop similar items:\n")
-    # print(results.to_string(index=False))
-    predict_price(
-    "DN50 horganyzott acélcső szereléssel",
-    "m"
-    )
+    print("\nTop similar items:\n")
+    print(results.to_string(index=False))
+    # predict_price(
+    # "DN50 horganyzott acélcső szereléssel",
+    # "m"
+    # )

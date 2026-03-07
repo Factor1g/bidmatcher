@@ -11,7 +11,7 @@ from ..config.setting import DATA_SOURCE, TRAINING_DATA_PATH, EMBEDDINGS_PATH, E
 # EMBEDDINGS_PATH = Path("models/bid_pricing/embeddings.npy")
 
 # EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-
+EFFECTIVE_MODEL = EMBEDDING_MODEL_NAME
 
 def get_all_excels(src_dir: Path) -> list[Path]:
     return list(src_dir.rglob("*.xlsx")) + list(src_dir.rglob("*.xls"))
@@ -90,8 +90,14 @@ def build_training_pipeline():
     EMBEDDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     np.save(EMBEDDINGS_PATH, embeddings)
 
-    print("Full training dataset + embeddings built successfully.")
+    # Save model name so search code knows which model to load
+    model_meta_path = EMBEDDINGS_PATH.with_suffix(".model_name.txt")
+    model_meta_path.write_text(EFFECTIVE_MODEL)
 
+    print("\n✓ Training dataset and embeddings saved successfully.")
+    print(f"  Parquet:    {TRAINING_DATA_PATH}")
+    print(f"  Embeddings: {EMBEDDINGS_PATH}")
+    print(f"  Model used: {EFFECTIVE_MODEL}")
 
 if __name__ == "__main__":
     build_training_pipeline()

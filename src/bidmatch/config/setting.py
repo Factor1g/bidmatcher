@@ -12,5 +12,6 @@ EMBEDDINGS_PATH = MODEL_DIR / "embeddings.npy"
 MODEL_DIR_REG = MODEL_DIR / "regression"
 
 #  ML 
-EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
+CROSS_ENCODER_MODEL  = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 TOP_K = 5
