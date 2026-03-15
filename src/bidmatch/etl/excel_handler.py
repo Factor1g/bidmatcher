@@ -5,7 +5,9 @@ from .excel_sheet_handler import detect_header, detect_columns, normalize_text, 
 from .description_resolver import resolve_description
 
 
-MECHANICAL_KEYWORDS = ["gep", "gepeszet", "epuletgepeszet", "mep", "mech", "me", "hvac", "legtechnika", "eg"]
+MECHANICAL_KEYWORDS = ["gep", "gepeszet", "epuletgepeszet", "mep", "mech", "me", "hvac",
+                    "legtechnika", "eg", "hutese", "futes", "szelloztetes", "szellozes", "viz",
+                    "csatorna", "csatornazas", "suritett levego", "heating", "cooling", "ventilation", "vent", "water", "drainage", "compressed air"]
 
 def is_mechanical_sheet(sheet_name: str) -> bool:
     sheet_name_normalized = normalize_text(sheet_name)

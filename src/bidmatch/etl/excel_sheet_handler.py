@@ -2,10 +2,11 @@ from venv import logger
 import pandas as pd
 import unicodedata
 from pathlib import Path
+from .unit_normalizer import normalize_unit
 
 COLUMN_KEYWORDS = {
     "item_description" : ["megnevezes" , "tetel szovege" , "tetel" , "tetel megnevezese" , "item" , "description" , "leiras" , "tetel leirasa"],
-    "quantity": ["mennyiseg" , "menny" , "qty" , "quantity" , "darab"],
+    "quantity": ["mennyiseg" , "menny" , "menny." , "qty" , "quantity" , "darab"],
     "material_cost": ["anyag egysegar", "egysegar anyag", "anyag egysegre", "anyag"],
     "labor_cost": ["dij egysegar", "egysegar dij", "munkadij", "szereles", "dij egysegre", "dij"],
     "unit": ["mertekegyseg" , "mert.egys" , "egyseg" , "mertek" , "unit", "me.", "egys", "egys."]
@@ -95,6 +96,8 @@ def parse_excel_sheet(file_path: str, project_id: str , sheet_name: str) -> pd.D
 
     df = df.dropna(subset=["item_description", "quantity"], how="any")
 
+    if "unit" in df.columns:
+        df["unit"] = df["unit"].astype(str).apply(normalize_unit)
     if "quantity" in df:
         df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce")
     if "material_cost" in df:

@@ -4,15 +4,22 @@ import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from sklearn.metrics.pairwise import cosine_similarity
+from ..etl.unit_normalizer import normalize_unit
 
 TOP_N_CANDIDATES = 50
 
 def build_artifacts():
     #df = build_big_dataframe(DATA_SOURCE)
+    print("Loading corpus and embeddings...")
     df = pd.read_parquet(TRAINING_DATA_PATH)
     embeddings = np.load(EMBEDDINGS_PATH)
-    #model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    return df, embeddings
+    print(f"Corpus size: {len(df)}, Embeddings shape: {embeddings.shape}")
+
+    print(f"Loading encoders.")
+    bi_encoder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL)
+    print("Encoders loaded.\nBi-Encoder:", EMBEDDING_MODEL_NAME, "\nCross-Encoder:", CROSS_ENCODER_MODEL)
+    return df, embeddings, bi_encoder, cross_encoder
 
 def build_query_text(description: str, unit: str) -> str:
     """
@@ -20,14 +27,18 @@ def build_query_text(description: str, unit: str) -> str:
       'item_description | unit'
     If unit is unknown at query time, leave it empty.
     """
-    unit = unit.strip() if unit else ""
+    unit = normalize_unit(unit.strip()) if unit else ""
     return f"{description.strip()} | {unit}" if unit else description.strip()
 
 def search(
-        query_text: str, unit: str = "",
-        top_k: int = TOP_K, top_n_candidates: int = TOP_N_CANDIDATES,
-        embedding_model: str = EMBEDDING_MODEL_NAME,
-        cross_encoder_model: str = CROSS_ENCODER_MODEL
+        query_text: str,
+        unit: str = "",
+        corpus_df: pd.DataFrame = None,
+        corpus_embeddings: np.ndarray = None,
+        bi_encoder: SentenceTransformer = None,
+        cross_encoder: CrossEncoder = None,
+        top_k: int = TOP_K,
+        top_n_candidates: int = TOP_N_CANDIDATES,        
         ) -> pd.DataFrame:
     
     """
@@ -47,11 +58,6 @@ def search(
         DataFrame with top_k results sorted by cross-encoder score
     """
 
-    df, corpus_embeddings = build_artifacts()
-    
-    print(f"[Bi-Encoder] Loading {embedding_model} …")
-    bi_encoder = SentenceTransformer(embedding_model)
-
     formatted_query = build_query_text(query_text, unit)
 
     query_embedding = bi_encoder.encode([formatted_query], convert_to_numpy=True, normalize_embeddings=True)
@@ -59,20 +65,17 @@ def search(
     similarities = cosine_similarity(query_embedding, corpus_embeddings)[0]
     candidate_idx = np.argsort(similarities)[-top_n_candidates:][::-1]
 
-    candidate_df = df.iloc[candidate_idx].copy()
+    candidate_df = corpus_df.iloc[candidate_idx].copy()
     candidate_df["bi_encoder_score"] = similarities[candidate_idx]
 
     print(f"[Bi-Encoder] Top-{top_n_candidates} candidates retrieved.")
 
-    print(f"[Cross-Encoder] Loading {cross_encoder_model} …")
-    cross_encoder = CrossEncoder(cross_encoder_model)
-
     candidate_texts = (candidate_df["item_description"].astype(str).str.strip() + " | " + candidate_df["unit"].astype(str).str.strip()).tolist()
 
-    pairs = [(query_text, cand) for cand in candidate_texts]
-    ce_scores = cross_encoder.predict(pairs)
+    # pairs = [(query_text, cand) for cand in candidate_texts]
+    # ce_scores = cross_encoder.predict(pairs)
 
-    candidate_df["cross_encoder_score"] = ce_scores
+    candidate_df["cross_encoder_score"] = cross_encoder.predict([(query_text, cand) for cand in candidate_texts])
 
     result_df = (
         candidate_df
