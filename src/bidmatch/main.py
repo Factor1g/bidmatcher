@@ -12,7 +12,7 @@ def main():
 
 if __name__ == "__main__":
     
-    build_training_pipeline()
+    #build_training_pipeline()
     process_excel(
         input_path=Path("F:\Egyeb\Programozas\BidMatch\data\input\isb_test.xlsx"),
         output_path=Path("output.xlsx")
