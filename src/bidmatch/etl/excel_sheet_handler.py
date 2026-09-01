@@ -75,26 +75,36 @@ def detect_columns(columns) -> dict:
 
     return detected       
 
-def parse_excel_sheet(file_path: str, project_id: str , sheet_name: str) -> pd.DataFrame:    
+def parse_excel_sheet(file_path: str, project_id: str , sheet_name: str, drop_incomplete: bool) -> pd.DataFrame:    
 
     file_path = Path(file_path)
     print(f"Reading sheet: {file_path.name} / {sheet_name}")
     df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
     print(f"Excel sheet read: {file_path.name} / {sheet_name} - {len(df)} sor")
+
     detect_header_row = detect_header(df)
     df = pd.read_excel(file_path, sheet_name=sheet_name, header=detect_header_row)
     column_map = detect_columns(df.columns)
     print(f"Columns detected: {column_map}")
 
+    # item_description nélkül nincs értelme feldolgozni
+    if "item_description" not in column_map:
+        print(f"Skipping sheet — no item_description column: {sheet_name}")
+        return pd.DataFrame()
+ 
+    # Csak a sikeresen detektált oszlopokat választjuk ki
+    # None értékek kihagyva — ez volt a [nan] not in index hiba oka
+    valid_cols = {k: v for k, v in column_map.items() if v is not None}
+ 
     for key in COLUMN_KEYWORDS.keys():
-        if key not in column_map:
+        if key not in valid_cols:
             print(f"Column for '{key}' not detected in {file_path.name} / {sheet_name}")
-            column_map[key] = None
-    
-    df = df[list(column_map.values())]
-    df = df.rename(columns={v: k for k, v in column_map.items()})
+ 
+    df = df[list(valid_cols.values())]
+    df = df.rename(columns={v: k for k, v in valid_cols.items()})
 
-    df = df.dropna(subset=["item_description", "quantity"], how="any")
+    if drop_incomplete:
+        df = df.dropna(subset=["item_description", "quantity"], how="any")
 
     if "unit" in df.columns:
         df["unit"] = df["unit"].astype(str).apply(normalize_unit)
