@@ -83,7 +83,7 @@ class HybridRRFRetriever():
         result = self._retriever.search(query, unit, top_k=top_k, use_cross_encoder=False)
         return result if result is not None else pd.DataFrame()
 
-class HíbridFullRetriever:
+class HybridFullRetriever:
     def __init__(self, corpus_df: pd.DataFrame, embeddings: np.ndarray):
         self._retriever = _HybridRetriever()
         self._retriever.build_index(corpus_df, embeddings)
@@ -93,7 +93,225 @@ class HíbridFullRetriever:
         return result if result is not None else pd.DataFrame()
 
 
-        
-
-
+def create_testset(corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path = EMBEDDINGS_PATH, output_path: Path = Path("data/testset.csv"), samples: int = 200) -> pd.DataFrame:
+    """
+    Generál egy annotálásra kész teszthalmazt a korpuszból.
  
+    Mit csinál:
+      - Vesz n_samples véletlenszerű sort a korpuszból → ezek lesznek a query-k
+      - Minden query mellé megkeresi a bi-encoder legjobb tippjét (pre_suggested)
+      - A correct_match oszlopot üresen hagyja → ezt kézzel kell kitölteni
+ 
+    Miért kell kézi annotálás:
+      A gépi értékelés nem tudja eldönteni hogy két különbözően megfogalmazott
+      leírás valóban ugyanarra a termékre utal-e. Ezt domain szakértő tudja csak
+      megítélni. A pre_suggested oszlop segít — ha a bi-encoder tippje helyes,
+      csak be kell írni az 1-et.
+ 
+    Output CSV:
+      query_description  : keresési szöveg
+      query_unit         : mértékegység
+      correct_match      : ← KÉZZEL KITÖLTENDŐ (1 / 0 / 0.5 / üres)
+      pre_suggested      : bi-encoder legjobb tippje
+      suggested_unit     : javasolt mértékegység
+      source_file        : forrás Excel fájl
+    """
+    print(f"Loading corpus from {corpus_path}...")
+    df = pd.read_parquet(corpus_path)
+    print(f"Loading embeddings from {embeddings_path}...")
+    embeddings = np.load(embeddings_path)
+
+    sample = df.sample(n=min(samples, len(df)), random_state=42).copy()
+
+    suggestions, suggested_units = [], []
+    
+    for _, row in sample.iterrows():
+        query_text = f"{row['item_description'].strip()} | {row['unit'].strip()}"
+        q_emb = SentenceTransformer(EMBEDDING_MODEL_NAME).encode([query_text], convert_to_numpy=True, normalize_embeddings=True)
+        sims = cosine_similarity(q_emb,embeddings)[0]
+
+        #Best match that is not the same as the query itself
+        for idx in np.argsort(sims)[::-1]:
+            candidate = df.iloc[idx]
+            if candidate['item_description'] != row['item_description']:
+                suggestions.append(candidate['item_description'])
+                suggested_units.append([candidate['unit']])
+                break
+        else:
+            suggestions.append("")
+            suggested_units.append("")
+
+    testset = pd.DataFrame({
+        "query_description": sample['item_description'].values,
+        "query_unit": sample['unit'].values,
+        "correct_match": "",
+        "pre_suggested": suggestions,
+        "suggested_unit": suggested_units,
+        "source_file": sample.get("source_file", pd.Series("")).values
+    })  
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    testset.to_csv(output_path, index=False, encoding='utf-8')
+
+    print(f"\n✓ Teszthalmaz mentve: {output_path}")
+    print(f"  {len(testset)} sor — töltsd ki a 'correct_match' oszlopot:")
+    print("    1     = pre_suggested helyes egyezés")
+    print("    0     = rossz egyezés")
+    print("    0.5   = részleges egyezés")
+    print("    üres  = kihagyandó sor")
+ 
+    return testset  
+
+def _similarity_score(correct: str, candidate: str, threshold: float = 0.5) -> float:
+    """
+    Overlap based similarity score between two strings.
+    Returns 1.0 if the overlap is above the threshold, 0.0 otherwise
+    """
+    correct_tokens   = set(correct.lower().split())
+    candidate_tokens = set(candidate.lower().split())
+    if not correct_tokens or not candidate_tokens:
+        return 0.0
+    overlap = len(correct_tokens & candidate_tokens)
+    shorter = min(len(correct_tokens), len(candidate_tokens))
+    score = overlap / shorter
+    return 1.0 if score >= threshold else 0.0
+
+def _hits(results: pd.DataFrame, correct: str, top_k: int) -> list[float]:
+    """
+    Returns a top_k long list:
+    1.0 if the correct string is found in the results, 0.0 otherwise.
+    """
+    hit_list = [_similarity_score(correct, str(row['item_description']).strip()) for _, row in results.iterrows()]
+
+    #Padding if results are less than top_k
+    hit_list += [0.0] * (top_k - len(hit_list))
+    return hit_list[:top_k]
+
+def precision_at_k(hits: list[float], top_k: int) -> float:
+    """
+    Precision@k = (# of relevant items in top k) / k
+    """
+    return sum(1 for hit in hits[:top_k] if hit > 0) / top_k
+
+def mrr_at_k(hits:list[float], top_k: int) -> float:
+    """
+    Mean Reciprocal Rank (MRR) at k
+    MRR = 1 / rank of the first relevant item
+    """
+    for rank, hit in enumerate(hits[:top_k], start=1):
+        if hit > 0:
+            return 1.0 / rank
+    return 0.0
+
+def ndcg_at_k(hits: list[float], top_k:int):
+    """
+    Normalized Discounted Cumulative Gain (NDCG) at k
+    NDCG = DCG / IDCG
+    DCG = sum((2^rel - 1) / log2(rank + 1)) for relevant items
+    IDCG = ideal DCG (max possible DCG)
+    """
+    dcg = sum(hit/np.log2(i + 2) for i, hit in enumerate(hits[:top_k]))
+    idcg = sum(1 / np.log2(i + 2) for i in range(min(sum(hit > 0 for hit in hits), top_k)))
+    return dcg / idcg if idcg > 0 else 0.0
+
+def evaluate(retriver, testset: pd.DataFrame, top_k: int = 5) -> dict:
+    """
+    Evaluate a retriever on a testset.
+    
+    Returns: dict {P@1, P@K, MRR@K, NDCG@K, n_queries}
+    """
+    p1, pk, mrr, ndcg = [], [], [], []
+
+    for _, row in testset.iterrows():
+        query = str(row['query_description'].strip().lower())
+        unit = str(row['query_unit'].strip().lower())
+        correct = str(row['pre_suggested'].strip().lower())
+
+        if not correct or correct in ["nan", "none", ""]:
+            continue
+
+        try:
+            score = float(correct)
+
+            if score == 0:
+                continue 
+
+
+
+        except ValueError:
+            print(f"Warning: Invalid correct_match value '{correct}' for query '{query}'. Skipping.")
+            continue
+
+        results = retriver.search(query, unit, top_k=top_k)
+
+        if results.empty:
+            p1.append(0.0)
+            pk.append(0.0)
+            mrr.append(0.0)
+            ndcg.append(0.0)
+
+            continue
+
+        hits = _hits(results, correct, top_k)
+        p1.append(precision_at_k(hits, 1))
+        pk.append(precision_at_k(hits, top_k))
+        mrr.append(mrr_at_k(hits, top_k))
+        ndcg.append(ndcg_at_k(hits, top_k))
+
+    if not p1:
+        print("No valid queries found in the testset. Evaluation aborted.")
+        return {}
+
+    return {
+        "P@1":          round(np.mean(p1),   3),
+        f"P@{top_k}":   round(np.mean(pk),   3),
+        f"MRR@{top_k}": round(np.mean(mrr),  3),
+        f"NDCG@{top_k}":round(np.mean(ndcg), 3),
+        "n_queries":    len(p1),
+    }
+
+def run_full_benchmark(testset_path: Path, corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path = EMBEDDINGS_PATH, top_k: int = 5) -> pd.DataFrame:
+    """
+    Run the full benchmark on the given testset.
+    Returns a DataFrame with the results for each retriever.
+    """
+    print(f"Loading")
+    corpus_df = pd.read_parquet(corpus_path)
+    embeddings = np.load(embeddings_path)
+    testset = pd.read_csv(testset_path, encoding='utf-8')
+
+    testset = testset[
+        testset["correct_match"].notna() &
+        (testset["correct_match"].astype(str).str.strip() != "")
+    ].reset_index(drop=True)
+    print(f"Annotált tesztsorok: {len(testset)}")
+ 
+    systems = {
+        "1. BM25 only":       BM25Retriever(corpus_df),
+        "2. Bi-Encoder only": BiEncoderOnlyRetriever(corpus_df, embeddings),
+        "3. Hybrid (RRF)":    HybridRRFRetriever(corpus_df, embeddings),
+        "4. Hybrid + CE":     HybridFullRetriever(corpus_df, embeddings),
+    }
+ 
+    results = {}
+    for name, retriever in systems.items():
+        print(f"\n── {name} ──")
+        results[name] = evaluate(retriever, testset, top_k)
+ 
+    result_df = pd.DataFrame(results).T
+ 
+    print("\n" + "═" * 60)
+    print("BENCHMARK EREDMÉNYEK")
+    print("═" * 60)
+    print(result_df.to_string())
+    print("═" * 60)
+ 
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    result_df.to_csv(output_path, encoding="utf-8-sig")
+    print(f"\n✓ Eredmények mentve: {output_path}")
+ 
+    return result_df
+
+    
