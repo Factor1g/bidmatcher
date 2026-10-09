@@ -13,7 +13,7 @@ def is_mechanical_sheet(sheet_name: str) -> bool:
     sheet_name_normalized = normalize_text(sheet_name)
     return any(k in sheet_name_normalized for k in MECHANICAL_KEYWORDS)
 
-def parse_excel(file_path: str, project_id: str) -> pd.DataFrame:
+def parse_excel(file_path: str, project_id: str, require_cost: bool) -> pd.DataFrame:
     print(f"Parsing excel {file_path.name}")
 
     file_path = Path(file_path)
@@ -54,6 +54,8 @@ def parse_excel(file_path: str, project_id: str) -> pd.DataFrame:
             # (last_full_desc) ne szakadjon meg ár/unit nélküli soroknál.
             df = resolve_description(df)
 
+            print(f"Rows in sheet {sheet_name}: {len(df)}")
+
             all_dfs.append(df)
 
         except Exception as e:
@@ -72,12 +74,14 @@ def parse_excel(file_path: str, project_id: str) -> pd.DataFrame:
         print(f"Hiba az összefűzésnél: {e}")
         result_df = pd.DataFrame()
 
-    result_df = _filter_for_corpus(concat_df)
+    result_df = _filter_for_corpus(concat_df, require_cost=require_cost)
+
+    print(f"Total rows after filtering: {len(result_df)}")
 
     return result_df
 
 
-def _filter_for_corpus(df: pd.DataFrame) -> pd.DataFrame:
+def _filter_for_corpus(df: pd.DataFrame, require_cost: bool) -> pd.DataFrame:
     """
         Korpusz építéshez szükséges szűrés — CSAK a resolve_description után hívandó.
  
@@ -94,8 +98,9 @@ def _filter_for_corpus(df: pd.DataFrame) -> pd.DataFrame:
         unit_clean = df["unit"].astype(str).str.strip().str.lower()
         df = df[~unit_clean.isin(["", "nan", "none"])]
 
-    cost_cols = [c for c in ["material_cost", "labor_cost"] if c in df.columns]
-    if cost_cols:
-        df = df[~df[cost_cols].isna().all(axis=1)]
+    if require_cost:
+        cost_cols = [c for c in ["material_cost", "labor_cost"] if c in df.columns]
+        if cost_cols:
+            df = df[~df[cost_cols].isna().all(axis=1)]
 
     return df.reset_index(drop=True)

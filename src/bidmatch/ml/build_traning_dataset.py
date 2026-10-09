@@ -28,7 +28,7 @@ def build_big_dataframe(src_dir: Path) ->pd.DataFrame:
         print(f"Processing {file_path.name} ({idx+1} / {len(excel_files)})")
 
         try:
-            df = parse_excel(file_path, idx+1)
+            df = parse_excel(file_path, idx+1, require_cost = True)
 
             if df is not None and not df.empty:
                 all_dfs.append(df)

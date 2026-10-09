@@ -46,7 +46,7 @@ def run_matching(
 
     #Input fájl beolvasása
     print("Input fájl beolvasása...")
-    df = parse_excel(file_path=input_path, project_id=0)
+    df = parse_excel(file_path=input_path, project_id=0, require_cost = False)
  
     if df.empty:
         print("Nem található feldolgozható adat az input fájlban.")
