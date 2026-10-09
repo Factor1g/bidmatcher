@@ -50,13 +50,13 @@ class BM25Retriever:
         self.bm25 = BM25(k1=k1, b=b).fit(tokenized_corpus)
         print(f"BM25 index built successfully for {len(corpus_texts)} items.")
 
-        def search(query: str, unit: str = "", top_k: int = 5) -> pd.DataFrame:
-            query_text = f"{query.strip()} | {unit.strip()}" if unit.strip() else query.strip()
-            scores = self.bm25.get_score(tokenize(query_text))
-            top_idx = np.argsort(scores)[::-1][:top_k]
-            result = self.corpus_df.iloc[top_idx].copy()
-            result["bm25_score"] = scores[top_idx]
-            return result.reset_index(drop=True)
+    def search(self,query: str, unit: str = "", top_k: int = 5) -> pd.DataFrame:
+        query_text = f"{query.strip()} | {unit.strip()}" if unit.strip() else query.strip()
+        scores = self.bm25.get_score(tokenize(query_text))
+        top_idx = np.argsort(scores)[::-1][:top_k]
+        result = self.corpus_df.iloc[top_idx].copy()
+        result["bm25_score"] = scores[top_idx]
+        return result.reset_index(drop=True)
 
 class BiEncoderOnlyRetriever:
     def __init__(self, corpus_df: pd.DataFrame, embeddings: np.ndarray, model_name: str = EMBEDDING_MODEL_NAME):
@@ -95,26 +95,20 @@ class HybridFullRetriever:
 
 def create_testset(corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path = EMBEDDINGS_PATH, output_path: Path = Path("data/testset.csv"), samples: int = 200) -> pd.DataFrame:
     """
-    Generál egy annotálásra kész teszthalmazt a korpuszból.
+    Generate a test set for manual annotation.
  
-    Mit csinál:
-      - Vesz n_samples véletlenszerű sort a korpuszból → ezek lesznek a query-k
-      - Minden query mellé megkeresi a bi-encoder legjobb tippjét (pre_suggested)
-      - A correct_match oszlopot üresen hagyja → ezt kézzel kell kitölteni
- 
-    Miért kell kézi annotálás:
-      A gépi értékelés nem tudja eldönteni hogy két különbözően megfogalmazott
-      leírás valóban ugyanarra a termékre utal-e. Ezt domain szakértő tudja csak
-      megítélni. A pre_suggested oszlop segít — ha a bi-encoder tippje helyes,
-      csak be kell írni az 1-et.
- 
+    What it does:
+      - Takes n_samples random rows from the corpus → these will be the queries
+      - For each query, finds the best match according to the bi-encoder (pre_suggested)
+      - Leaves the correct_match column empty → this needs to be filled manually
+  
     Output CSV:
-      query_description  : keresési szöveg
-      query_unit         : mértékegység
-      correct_match      : ← KÉZZEL KITÖLTENDŐ (1 / 0 / 0.5 / üres)
-      pre_suggested      : bi-encoder legjobb tippje
-      suggested_unit     : javasolt mértékegység
-      source_file        : forrás Excel fájl
+      query_description  : queried item description
+      query_unit         : queried item unit
+      correct_match      : ← cell for annotation (1 / 0 / 0.5 / empty)
+      pre_suggested      : bi-encoder best match
+      suggested_unit     : suggested unit for the pre_suggested match
+      source_file        : source file of the query (if available)
     """
     print(f"Loading corpus from {corpus_path}...")
     df = pd.read_parquet(corpus_path)
@@ -163,7 +157,7 @@ def create_testset(corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path
  
     return testset  
 
-def _similarity_score(correct: str, candidate: str, threshold: float = 0.5) -> float:
+def _similarity_score(correct: str, candidate: str, threshold: float = 0.8) -> float:
     """
     Overlap based similarity score between two strings.
     Returns 1.0 if the overlap is above the threshold, 0.0 otherwise
@@ -226,24 +220,24 @@ def evaluate(retriver, testset: pd.DataFrame, top_k: int = 5) -> dict:
     for _, row in testset.iterrows():
         query = str(row['query_description'].strip().lower())
         unit = str(row['query_unit'].strip().lower())
-        correct = str(row['pre_suggested'].strip().lower())
+        correct = str(row['correct_match'].strip().lower())
 
         if not correct or correct in ["nan", "none", ""]:
             continue
 
-        try:
-            score = float(correct)
+        # try:
+        #     match = str(correct)
 
-            if score == 0:
-                continue 
+        #     if match == 0:
+        #         continue 
 
 
 
-        except ValueError:
-            print(f"Warning: Invalid correct_match value '{correct}' for query '{query}'. Skipping.")
-            continue
+        # except ValueError:
+        #     print(f"Warning: Invalid correct_match value '{correct}' for query '{query}'. Skipping.")
+        #     continue
 
-        results = retriver.search(query, unit, top_k=top_k)
+        results = retriver.search(query, unit)
 
         if results.empty:
             p1.append(0.0)
@@ -271,7 +265,7 @@ def evaluate(retriver, testset: pd.DataFrame, top_k: int = 5) -> dict:
         "n_queries":    len(p1),
     }
 
-def run_full_benchmark(testset_path: Path, corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path = EMBEDDINGS_PATH, top_k: int = 5) -> pd.DataFrame:
+def run_full_benchmark(testset_path: Path, output_path: Path = Path("data/benchmark_results.csv"), corpus_path: Path = TRAINING_DATA_PATH, embeddings_path: Path = EMBEDDINGS_PATH, top_k: int = 5) -> pd.DataFrame:
     """
     Run the full benchmark on the given testset.
     Returns a DataFrame with the results for each retriever.
@@ -279,7 +273,7 @@ def run_full_benchmark(testset_path: Path, corpus_path: Path = TRAINING_DATA_PAT
     print(f"Loading")
     corpus_df = pd.read_parquet(corpus_path)
     embeddings = np.load(embeddings_path)
-    testset = pd.read_csv(testset_path, encoding='utf-8')
+    testset = pd.read_csv(testset_path, encoding='cp1250', sep=None, engine='python')
 
     testset = testset[
         testset["correct_match"].notna() &
@@ -297,7 +291,7 @@ def run_full_benchmark(testset_path: Path, corpus_path: Path = TRAINING_DATA_PAT
     results = {}
     for name, retriever in systems.items():
         print(f"\n── {name} ──")
-        results[name] = evaluate(retriever, testset, top_k)
+        results[name] = evaluate(retriever, testset)
  
     result_df = pd.DataFrame(results).T
  
@@ -314,4 +308,132 @@ def run_full_benchmark(testset_path: Path, corpus_path: Path = TRAINING_DATA_PAT
  
     return result_df
 
-    
+def create_test_set(
+    corpus_path: Path = TRAINING_DATA_PATH,
+    embeddings_path: Path = EMBEDDINGS_PATH,
+    output_path: Path = Path("data/testset.csv"),
+    n_samples: int = 200,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """
+    Generál egy annotálásra kész teszthalmazt a korpuszból — B megoldás.
+
+    Minden query mellé három rendszer tippjét generálja egymás mellett,
+    így az annotáláskor látod az összes rendszer javaslatát, és nem vagy
+    elfogult egyikük felé sem.
+
+    Fontos: a tippek NEM jöhetnek ugyanabból a source_file-ból mint a query
+    — ez megakadályozza hogy a modell saját magát találja meg.
+
+    Output CSV oszlopok:
+      query_description     : keresési szöveg
+      query_unit            : mértékegység
+      query_source          : forrás Excel fájl (tájékoztatásul)
+      bm25_suggested        : BM25 legjobb tippje
+      bm25_unit             : BM25 tipp mértékegysége
+      bi_suggested          : Bi-Encoder legjobb tippje
+      bi_unit               : Bi-Encoder tipp mértékegysége
+      hybrid_suggested      : Hibrid (RRF) legjobb tippje
+      hybrid_unit           : Hibrid tipp mértékegysége
+      correct_match         : ← KÉZZEL KITÖLTENDŐ
+                                  bm25 / bi / hybrid  = melyik rendszer tippje helyes
+                                  none                = egyik sem helyes
+                                  <szöveg>            = saját helyes leírás beírva
+    """
+    print(f"Korpusz betöltése: {corpus_path}")
+    corpus_df  = pd.read_parquet(corpus_path)
+    embeddings = np.load(embeddings_path)
+    print(f"Korpusz mérete: {len(corpus_df)} sor")
+
+    sample = corpus_df.sample(n=min(n_samples, len(corpus_df)), random_state=seed).copy()
+
+    # Modellek betöltése
+    print(f"[Bi-Encoder] Modell betöltése: {EMBEDDING_MODEL_NAME}")
+    bi_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+    corpus_texts = (
+        corpus_df["item_description"].astype(str).str.strip()
+        + " | "
+        + corpus_df["unit"].astype(str).str.strip()
+    ).tolist()
+
+    print("[BM25] Index építés...")
+    tokenized_corpus = [tokenize(t) for t in corpus_texts]
+    bm25 = BM25(k1=1.5, b=0.6).fit(tokenized_corpus)
+    print("[BM25] Kész")
+
+    rows = []
+
+    for _, row in sample.iterrows():
+        query_desc   = str(row["item_description"]).strip()
+        query_unit   = str(row.get("unit", "")).strip()
+        query_source = str(row.get("source_file", "")).strip()
+        query_text   = f"{query_desc} | {query_unit}" if query_unit else query_desc
+
+        # Korpusz szűkítése: ugyanabból a source_file-ból ne jöjjön tipp
+        # Ez megakadályozza hogy a modell saját magát vagy közvetlen szomszédját
+        # találja meg — ami triviálisan helyes lenne és torzítaná a metrikákat
+        if query_source:
+            other_mask = corpus_df["source_file"].astype(str) != query_source
+        else:
+            # Ha nincs source_file info, legalább a pontos szövegegyezést zárjuk ki
+            other_mask = corpus_df["item_description"].astype(str) != query_desc
+
+        other_df         = corpus_df[other_mask].reset_index(drop=True)
+        other_embeddings = embeddings[other_mask.values]
+        other_tokenized  = [t for t, m in zip(tokenized_corpus, other_mask) if m]
+
+        # ── BM25 tipp ────────────────────────────────────────────────────────
+        bm25_other = BM25(k1=1.5, b=0.6).fit(other_tokenized)
+        bm25_scores = bm25_other.get_score(tokenize(query_text))
+        bm25_idx    = int(np.argsort(bm25_scores)[::-1][0])
+        bm25_sugg   = other_df.iloc[bm25_idx]["item_description"]
+        bm25_unit   = other_df.iloc[bm25_idx]["unit"]
+
+        # ── Bi-Encoder tipp ──────────────────────────────────────────────────
+        q_emb     = bi_model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)
+        bi_scores = cosine_similarity(q_emb, other_embeddings)[0]
+        bi_idx    = int(np.argsort(bi_scores)[::-1][0])
+        bi_sugg   = other_df.iloc[bi_idx]["item_description"]
+        bi_unit   = other_df.iloc[bi_idx]["unit"]
+
+        # ── Hibrid RRF tipp ──────────────────────────────────────────────────
+        bm25_ranking = list(np.argsort(bm25_scores)[::-1][:50])
+        bi_ranking   = list(np.argsort(bi_scores)[::-1][:50])
+        fused        = reciprocal_rank_fusion(
+            rankings=[bm25_ranking, bi_ranking],
+            weights=[0.4, 0.6],
+            k=60,
+        )
+        hybrid_idx  = fused[0][0]
+        hybrid_sugg = other_df.iloc[hybrid_idx]["item_description"]
+        hybrid_unit = other_df.iloc[hybrid_idx]["unit"]
+
+        rows.append({
+            "query_description": query_desc,
+            "query_unit":        query_unit,
+            "query_source":      query_source,
+            "bm25_suggested":    bm25_sugg,
+            "bm25_unit":         bm25_unit,
+            "bi_suggested":      bi_sugg,
+            "bi_unit":           bi_unit,
+            "hybrid_suggested":  hybrid_sugg,
+            "hybrid_unit":       hybrid_unit,
+            "correct_match":     "",   # ← kézzel kitöltendő
+        })
+
+    testset = pd.DataFrame(rows)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    testset.to_csv(output_path, index=False, encoding="utf-8-sig")
+
+    print(f"\n✓ Teszthalmaz mentve: {output_path}")
+    print(f"  {len(testset)} sor — töltsd ki a 'correct_match' oszlopot:")
+    print("    'bm25'    = a BM25 tippje helyes")
+    print("    'bi'      = a Bi-Encoder tippje helyes")
+    print("    'hybrid'  = a Hibrid tippje helyes")
+    print("    'none'    = egyik sem helyes")
+    print("    <szöveg>  = saját helyes leírás (ha egyik sem jó)")
+
+    return testset
